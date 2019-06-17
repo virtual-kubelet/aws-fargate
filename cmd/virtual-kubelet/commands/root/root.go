@@ -22,12 +22,12 @@ import (
 
 	"github.com/pkg/errors"
 	"github.com/spf13/cobra"
+	"github.com/virtual-kubelet/aws-fargate"
 	"github.com/virtual-kubelet/virtual-kubelet/errdefs"
 	"github.com/virtual-kubelet/virtual-kubelet/log"
 	"github.com/virtual-kubelet/virtual-kubelet/manager"
 	"github.com/virtual-kubelet/virtual-kubelet/node"
 	"github.com/virtual-kubelet/virtual-kubelet/providers"
-	"github.com/virtual-kubelet/virtual-kubelet/providers/register"
 	corev1 "k8s.io/api/core/v1"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -120,16 +120,11 @@ func runRootCommand(ctx context.Context, c Opts) error {
 		return err
 	}
 
-	initConfig := register.InitConfig{
-		ConfigPath:      c.ProviderConfigPath,
-		NodeName:        c.NodeName,
-		OperatingSystem: c.OperatingSystem,
-		ResourceManager: rm,
-		DaemonPort:      int32(c.ListenPort),
-		InternalIP:      os.Getenv("VKUBELET_POD_IP"),
+	if c.Provider != "" && c.Provider != "aws" {
+		return errors.Errorf("provider %q is not supported: only the was provider is supported", c.Provider)
 	}
 
-	p, err := register.GetProvider(c.Provider, initConfig)
+	p, err := aws.NewFargateProvider(c.ProviderConfigPath, rm, c.NodeName, c.OperatingSystem, os.Getenv("VKUBELET_POD_IP"), int32(c.ListenPort))
 	if err != nil {
 		return err
 	}
@@ -177,13 +172,13 @@ func runRootCommand(ctx context.Context, c Opts) error {
 	eb.StartRecordingToSink(&corev1client.EventSinkImpl{Interface: client.CoreV1().Events(c.KubeNamespace)})
 
 	pc, err := node.NewPodController(node.PodControllerConfig{
-		PodClient:         client.CoreV1(),
-		PodInformer:       podInformer,
-		EventRecorder:     eb.NewRecorder(scheme.Scheme, corev1.EventSource{Component: path.Join(pNode.Name, "pod-controller")}),
-		Provider:          p,
-		SecretInformer:    secretInformer,
-		ConfigMapInformer: configMapInformer,
-		ServiceInformer:   serviceInformer,
+		PodClient:       client.CoreV1(),
+		PodInformer:     podInformer,
+		EventRecorder:   eb.NewRecorder(scheme.Scheme, corev1.EventSource{Component: path.Join(pNode.Name, "pod-controller")}),
+		Provider:        p,
+		SecretLister:    secretInformer.Lister(),
+		ConfigMapLister: configMapInformer.Lister(),
+		ServiceLister:   serviceInformer.Lister(),
 	})
 	if err != nil {
 		return errors.Wrap(err, "error setting up pod controller")
