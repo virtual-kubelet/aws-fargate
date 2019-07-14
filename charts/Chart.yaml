@@ -1,0 +1,10 @@
+apiVersion: v1
+appVersion: "0.11.1"
+description: A Helm chart to install virtual kubelet for AWS fargate
+name: virtual-kubelet-aws-fargate
+sources: 
+  - https://github.com/virtual-kubelet/aws-fargate
+version: 0.1.0
+maintainers:
+  - name: Sumit Joshi
+    email: sumitjoshi024@gmail.com
