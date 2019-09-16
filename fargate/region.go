@@ -6,6 +6,7 @@ import (
 
 // Regions is the set of AWS regions where a service is available.
 // https://aws.amazon.com/about-aws/global-infrastructure/regional-product-services/
+// https://docs.aws.amazon.com/AmazonECS/latest/developerguide/AWS_Fargate.html
 type Regions []string
 
 var (
@@ -24,6 +25,9 @@ var (
 		"us-east-2",      // US East (Ohio)
 		"us-west-1",      // US West (N. California)
 		"us-west-2",      // US West (Oregon)
+		"us-gov-west-1",  // AWS GovCloud (US)
+		"us-gov-east-1",  //AWS GovCloud (US-East)	
+		"ap-east-1",      // Asia Pacific (Hong Kong)
 	}
 )
 
