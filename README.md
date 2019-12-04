@@ -1,3 +1,7 @@
+# Status
+
+⚠️This project is currently __inactive__ and is seeking maintainers.⚠️
+
 # AWS Fargate
 
 [AWS Fargate](https://aws.amazon.com/fargate/) is a technology that allows you to run containers
