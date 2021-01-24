@@ -24,7 +24,7 @@ SecurityGroups = ["sg-12345678"]
 # If your pod requires internet access (e.g. to download container images from ECR or Docker Hub),
 # this should be set to "true" for pods on public subnets with internet gateways,
 # and to "false" for pods on private subnets with NAT gateways.
-AssignPublicIPv4Address = false
+AssignPublicIPv4Address = true
 
 # Role assumed by AWS Fargate to execute your pod. Optional.
 # https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task_execution_IAM_role.html
