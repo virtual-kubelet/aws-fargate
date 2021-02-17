@@ -128,7 +128,15 @@ func (p *FargateProvider) CreatePod(ctx context.Context, pod *corev1.Pod) error 
 // UpdatePod takes a Kubernetes Pod and updates it within the provider.
 func (p *FargateProvider) UpdatePod(ctx context.Context, pod *corev1.Pod) error {
 	log.Printf("Received UpdatePod request for %s/%s.\n", pod.Namespace, pod.Name)
-	return errNotImplemented
+
+	// There's no need to get scheduled pod and update it in Fargate.
+	// However, this is called in every loop. Even worse, created k8s pod object will never be same as provider pod,
+	// because service account token and some default tolerance will be added to pod spec.
+	// https://github.com/virtual-kubelet/virtual-kubelet/blob/bd742d5d99eafb0140f32def3b071028925d9dfa/node/pod.go#L75-L76
+	//
+	// Returning any error will result in `ProviderFailed` status on the pod. We just return nil here.
+
+	return nil
 }
 
 // DeletePod takes a Kubernetes Pod and deletes it from the provider.
