@@ -127,11 +127,12 @@ func NewPod(cluster *Cluster, pod *corev1.Pod) (*Pod, error) {
 	// Register the task definition with Fargate.
 	log.Printf("RegisterTaskDefinition input:%+v", taskDef)
 	output, err := api.RegisterTaskDefinition(taskDef)
-	log.Printf("RegisterTaskDefinition err:%+v output:%+v", err, output)
 	if err != nil {
 		err = fmt.Errorf("failed to register task definition: %v", err)
 		return nil, err
 	}
+
+	log.Printf("RegisterTaskDefinition output:%+v", output)
 
 	// Save the registered task definition ARN.
 	fgPod.taskDefArn = *output.TaskDefinition.TaskDefinitionArn
@@ -193,7 +194,6 @@ func (pod *Pod) Start() error {
 
 	log.Printf("RunTask input:%+v", runTaskInput)
 	runTaskOutput, err := api.RunTask(runTaskInput)
-	log.Printf("RunTask err:%+v output:%+v", err, runTaskOutput)
 	if err != nil || len(runTaskOutput.Tasks) == 0 {
 		if len(runTaskOutput.Failures) != 0 {
 			err = fmt.Errorf("reason: %s", *runTaskOutput.Failures[0].Reason)
@@ -202,6 +202,7 @@ func (pod *Pod) Start() error {
 		return err
 	}
 
+	log.Printf("RunTask output:%+v", runTaskOutput)
 	// Save the task ARN.
 	pod.taskArn = *runTaskOutput.Tasks[0].TaskArn
 

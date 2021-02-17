@@ -166,8 +166,6 @@ func (p *FargateProvider) GetPod(ctx context.Context, namespace, name string) (*
 		return nil, err
 	}
 
-	log.Printf("Responding to GetPod: %+v.\n", spec)
-
 	return spec, nil
 }
 
@@ -216,6 +214,7 @@ func (p *FargateProvider) GetPods(ctx context.Context) ([]*corev1.Pod, error) {
 	}
 
 	var result []*corev1.Pod
+	var podNames []string
 
 	for _, pod := range pods {
 		spec, err := pod.GetSpec()
@@ -225,9 +224,10 @@ func (p *FargateProvider) GetPods(ctx context.Context) ([]*corev1.Pod, error) {
 		}
 
 		result = append(result, spec)
+		podNames = append(podNames, fmt.Sprintf("%s/%s", spec.Namespace, spec.Name))
 	}
 
-	log.Printf("Responding to GetPods: %+v.\n", result)
+	log.Printf("Responding to GetPods: %+v.\n", podNames)
 
 	return result, nil
 }
