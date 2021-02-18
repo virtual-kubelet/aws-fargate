@@ -1,0 +1,6 @@
+The virtual kubelet is getting deployed on your cluster.
+
+To verify that virtual kubelet has started, run:
+
+kubectl --namespace={{ .Release.Namespace }} get pods -l app.kubernetes.io/instance={{ .Release.Name }}
+

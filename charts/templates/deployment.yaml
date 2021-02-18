@@ -1,0 +1,68 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "virtual-kubelet-aws-fargate.fullname" . }}
+  labels:
+{{ include "virtual-kubelet-aws-fargate.labels" . | indent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "virtual-kubelet-aws-fargate.name" . }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+      labels:
+        app.kubernetes.io/name: {{ include "virtual-kubelet-aws-fargate.name" . }}
+        app.kubernetes.io/instance: {{ .Release.Name }}
+    spec:
+    {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+    {{- end }}
+      containers:
+      - name: {{ .Chart.Name }}
+        args:
+        - --provider
+        - aws
+        - --provider-config
+        - /etc/fargate/fargate.toml
+        - --os 
+        - {{ .Values.os }}
+        - --nodename
+        - {{ .Values.nodename }}
+        command:
+        - virtual-kubelet
+        image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+        imagePullPolicy: {{ .Values.image.pullPolicy }}
+        resources:
+{{- toYaml .Values.resources | nindent 12 }}
+        env:
+        - name: KUBELET_PORT
+          value: "10250"
+        volumeMounts:
+        - mountPath: /etc/fargate/
+          name: fargate-config-volume
+          readOnly: true
+      serviceAccountName: {{ include "virtual-kubelet-aws-fargate.fullname" . }}
+      volumes:
+      - configMap:
+          items:
+          - key: fargate.toml
+            path: fargate.toml
+          name: {{ include "virtual-kubelet-aws-fargate.fullname" . }}
+        name: fargate-config-volume
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+    {{- end }}
+    {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+    {{- end }}

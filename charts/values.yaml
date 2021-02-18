@@ -1,0 +1,37 @@
+# Default values for virtual-kubelet-aws-fargate.
+# This is a YAML-formatted file.
+# Declare variables to be passed into your templates.
+
+replicaCount: 1
+
+image:
+  repository: microsoft/virtual-kubelet
+  tag: latest
+  pullPolicy: IfNotPresent
+
+aws:
+  region: us-east-1
+  clusterName: "default-vk"
+  subnets: []
+  securityGroups: []
+  assignPublicIPv4Address: false
+  taskExecutionRoleARN: ""
+  cloudWatchLogGroupName: ""
+  platformVersion: "LATEST"
+
+os: "Linux"
+nodename: "virtual-kubelet"
+  
+resources: {}
+  # limits:
+  #   cpu: 100m
+  #   memory: 128Mi
+  # requests:
+  #   cpu: 100m
+  #   memory: 128Mi
+
+nodeSelector: {}
+
+tolerations: []
+
+affinity: {}
