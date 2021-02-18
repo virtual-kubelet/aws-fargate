@@ -51,3 +51,5 @@ replace k8s.io/client-go => k8s.io/client-go v11.0.1-0.20190606204521-b8faab9c51
 replace k8s.io/kubernetes => k8s.io/kubernetes v1.14.3
 
 replace go.opencensus.io => go.opencensus.io v0.19.3
+
+replace git.apache.org/thrift.git => github.com/apache/thrift v0.0.0-20180902110319-2566ecd5d999
