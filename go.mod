@@ -5,7 +5,7 @@ go 1.12
 require (
 	contrib.go.opencensus.io/exporter/ocagent v0.5.0
 	github.com/BurntSushi/toml v0.3.1
-	github.com/aws/aws-sdk-go v1.20.1
+	github.com/aws/aws-sdk-go v1.34.0
 	github.com/docker/spdystream v0.0.0-20181023171402-6480d4af844c // indirect
 	github.com/elazarl/goproxy v0.0.0-20190421051319-9d40249d3c2f // indirect
 	github.com/elazarl/goproxy/ext v0.0.0-20190421051319-9d40249d3c2f // indirect
@@ -18,14 +18,13 @@ require (
 	github.com/modern-go/reflect2 v1.0.1 // indirect
 	github.com/onsi/ginkgo v1.8.0 // indirect
 	github.com/onsi/gomega v1.5.0 // indirect
-	github.com/pkg/errors v0.8.1
+	github.com/pkg/errors v0.9.1
 	github.com/sirupsen/logrus v1.2.0
 	github.com/spf13/cobra v0.0.5
 	github.com/spf13/pflag v1.0.3
 	github.com/virtual-kubelet/virtual-kubelet v0.10.0
 	go.opencensus.io v0.21.0
 	golang.org/x/crypto v0.0.0-20190617133340-57b3e21c3d56 // indirect
-	golang.org/x/net v0.0.0-20190613194153-d28f0bde5980 // indirect
 	golang.org/x/oauth2 v0.0.0-20190402181905-9f3314589c9a // indirect
 	golang.org/x/sync v0.0.0-20190423024810-112230192c58 // indirect
 	golang.org/x/sys v0.0.0-20190616124812-15dcb6c0061f // indirect
