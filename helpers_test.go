@@ -271,6 +271,7 @@ func retry(action fn) error {
 		if attempts == 0 {
 			return fmt.Errorf("action failed, maximum attempts reached")
 		}
+		attempts--
 
 		err := action()
 		if err == nil {
