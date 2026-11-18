@@ -340,8 +340,8 @@ func TestAWSFargateProviderPodLifecycle(t *testing.T) {
 
 // waitUntilPodStatus polls pod status until the desired state is reached.
 func waitUntilPodStatus(provider *vkAWS.FargateProvider, podName string, desiredStatus v1.PodPhase) error {
-	ctx := context.Background()
-	context.WithTimeout(ctx, time.Duration(time.Second*60))
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(time.Second*60))
+	defer cancel()
 	for {
 		select {
 		case <-ctx.Done():
