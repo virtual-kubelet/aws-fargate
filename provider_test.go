@@ -126,7 +126,7 @@ func TestMain(m *testing.M) {
 	}
 
 	// Attach the default policy allowing log writes and ECR pulls.
-	iamClient.AttachRolePolicy(&iam.AttachRolePolicyInput{
+	_, err = iamClient.AttachRolePolicy(&iam.AttachRolePolicyInput{
 		PolicyArn: aws.String("arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"),
 		RoleName:  executorRoleName,
 	})
@@ -139,7 +139,7 @@ func TestMain(m *testing.M) {
 	exitCode := m.Run()
 
 	// Delete the task execution role.
-	iamClient.DetachRolePolicy(&iam.DetachRolePolicyInput{
+	_, err = iamClient.DetachRolePolicy(&iam.DetachRolePolicyInput{
 		PolicyArn: aws.String("arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"),
 		RoleName:  executorRoleName,
 	})
@@ -179,7 +179,7 @@ func TestAWSFargateProviderPodLifecycle(t *testing.T) {
 		ClusterName: aws.String(testName),
 	})
 	if err != nil {
-		t.Error(err)
+		t.Fatal(err)
 	}
 	clusterID := createResponse.Cluster.ClusterArn
 
