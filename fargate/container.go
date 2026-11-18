@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/service/ecs"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/ecs/types"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -31,7 +31,7 @@ const (
 
 // Container is the representation of a Kubernetes container in Fargate.
 type container struct {
-	definition ecs.ContainerDefinition
+	definition types.ContainerDefinition
 	startTime  time.Time
 	finishTime time.Time
 }
@@ -41,11 +41,11 @@ func newContainer(spec *corev1.Container) (*container, error) {
 	var cntr container
 
 	// Translate the Kubernetes container spec to a Fargate container definition.
-	cntr.definition = ecs.ContainerDefinition{
+	cntr.definition = types.ContainerDefinition{
 		Name:       aws.String(spec.Name),
 		Image:      aws.String(spec.Image),
-		EntryPoint: aws.StringSlice(spec.Command),
-		Command:    aws.StringSlice(spec.Args),
+		EntryPoint: spec.Command,
+		Command:    spec.Args,
 	}
 
 	if spec.WorkingDir != "" {
@@ -57,7 +57,7 @@ func newContainer(spec *corev1.Container) (*container, error) {
 		for _, env := range spec.Env {
 			cntr.definition.Environment = append(
 				cntr.definition.Environment,
-				&ecs.KeyValuePair{
+				types.KeyValuePair{
 					Name:  aws.String(env.Name),
 					Value: aws.String(env.Value),
 				})
@@ -71,10 +71,10 @@ func newContainer(spec *corev1.Container) (*container, error) {
 }
 
 // NewContainerFromDefinition creates a new container from a Fargate container definition.
-func newContainerFromDefinition(def *ecs.ContainerDefinition, startTime *time.Time) (*container, error) {
+func newContainerFromDefinition(def types.ContainerDefinition, startTime *time.Time) (*container, error) {
 	var cntr container
 
-	cntr.definition = *def
+	cntr.definition = def
 
 	if startTime != nil {
 		cntr.startTime = *startTime
@@ -85,30 +85,28 @@ func newContainerFromDefinition(def *ecs.ContainerDefinition, startTime *time.Ti
 
 // ConfigureLogs configures container logs to be sent to the given CloudWatch log group.
 func (cntr *container) configureLogs(region string, logGroupName string, streamPrefix string) {
-	streamPrefix = fmt.Sprintf("%s_%s", streamPrefix, *cntr.definition.Name)
+	streamPrefix = fmt.Sprintf("%s_%s", streamPrefix, aws.ToString(cntr.definition.Name))
 
 	// Fargate requires awslogs log driver.
-	cntr.definition.LogConfiguration = &ecs.LogConfiguration{
-		LogDriver: aws.String(ecs.LogDriverAwslogs),
-		Options: map[string]*string{
-			containerLogOptionRegion:       aws.String(region),
-			containerLogOptionGroup:        aws.String(logGroupName),
-			containerLogOptionStreamPrefix: aws.String(streamPrefix),
+	cntr.definition.LogConfiguration = &types.LogConfiguration{
+		LogDriver: types.LogDriverAwslogs,
+		Options: map[string]string{
+			containerLogOptionRegion:       region,
+			containerLogOptionGroup:        logGroupName,
+			containerLogOptionStreamPrefix: streamPrefix,
 		},
 	}
 }
 
 // GetStatus returns the status of a container running in Fargate.
-func (cntr *container) getStatus(runtimeState *ecs.Container) corev1.ContainerStatus {
+func (cntr *container) getStatus(runtimeState types.Container) corev1.ContainerStatus {
 	var reason string
 	var state corev1.ContainerState
 	var isReady bool
 
-	if runtimeState.Reason != nil {
-		reason = *runtimeState.Reason
-	}
+	reason = aws.ToString(runtimeState.Reason)
 
-	switch *runtimeState.LastStatus {
+	switch aws.ToString(runtimeState.LastStatus) {
 	case containerStatusProvisioning,
 		containerStatusPending:
 		state = corev1.ContainerState{
@@ -137,9 +135,7 @@ func (cntr *container) getStatus(runtimeState *ecs.Container) corev1.ContainerSt
 		}
 
 		var exitCode int32
-		if runtimeState.ExitCode != nil {
-			exitCode = int32(*runtimeState.ExitCode)
-		}
+		exitCode = aws.ToInt32(runtimeState.ExitCode)
 
 		state = corev1.ContainerState{
 			Terminated: &corev1.ContainerStateTerminated{
@@ -155,11 +151,11 @@ func (cntr *container) getStatus(runtimeState *ecs.Container) corev1.ContainerSt
 	}
 
 	return corev1.ContainerStatus{
-		Name:         *runtimeState.Name,
+		Name:         aws.ToString(runtimeState.Name),
 		State:        state,
 		Ready:        isReady,
 		RestartCount: 0,
-		Image:        *cntr.definition.Image,
+		Image:        aws.ToString(cntr.definition.Image),
 		ImageID:      "",
 		ContainerID:  "",
 	}
@@ -240,7 +236,7 @@ func (cntr *container) setResourceRequirements(reqs *corev1.ResourceRequirements
 	}
 
 	// Set final values.
-	cntr.definition.Cpu = aws.Int64(cpu)
-	cntr.definition.Memory = aws.Int64(memory)
-	cntr.definition.MemoryReservation = aws.Int64(memoryReservation)
+	cntr.definition.Cpu = int32(cpu)
+	cntr.definition.Memory = aws.Int32(int32(memory))
+	cntr.definition.MemoryReservation = aws.Int32(int32(memoryReservation))
 }

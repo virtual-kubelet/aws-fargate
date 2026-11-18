@@ -84,9 +84,8 @@ func (p *FargateProvider) loadConfig(r io.Reader) error {
 	}
 
 	// Validate aggregate configuration.
-	if config.Region == "" {
-		return fmt.Errorf("Region is a required field")
-	}
+	// The Region is not checked against a list: it is the AWS SDK's to resolve, from this file or from AWS_REGION or the
+	// shared configuration when it is empty.
 	if config.Subnets == nil || len(config.Subnets) == 0 {
 		return fmt.Errorf("Subnets is a required field")
 	}

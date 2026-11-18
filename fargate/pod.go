@@ -1,14 +1,16 @@
 package fargate
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"strconv"
 	"strings"
 	"time"
 
-	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/service/ecs"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/ecs"
+	"github.com/aws/aws-sdk-go-v2/service/ecs/types"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -58,9 +60,7 @@ type Pod struct {
 }
 
 // NewPod creates a new Kubernetes pod on Fargate.
-func NewPod(cluster *Cluster, pod *corev1.Pod) (*Pod, error) {
-	api := client.api
-
+func NewPod(ctx context.Context, cluster *Cluster, pod *corev1.Pod) (*Pod, error) {
 	// Initialize the pod.
 	fgPod := &Pod{
 		namespace:  pod.Namespace,
@@ -75,9 +75,9 @@ func NewPod(cluster *Cluster, pod *corev1.Pod) (*Pod, error) {
 	// Create a task definition matching the pod spec.
 	taskDef := &ecs.RegisterTaskDefinitionInput{
 		Family:                  aws.String(tag),
-		RequiresCompatibilities: []*string{aws.String(ecs.CompatibilityFargate)},
-		NetworkMode:             aws.String(ecs.NetworkModeAwsvpc),
-		ContainerDefinitions:    []*ecs.ContainerDefinition{},
+		RequiresCompatibilities: []types.Compatibility{types.CompatibilityFargate},
+		NetworkMode:             types.NetworkModeAwsvpc,
+		ContainerDefinitions:    []types.ContainerDefinition{},
 	}
 
 	// For each container in the pod...
@@ -94,14 +94,14 @@ func NewPod(cluster *Cluster, pod *corev1.Pod) (*Pod, error) {
 		}
 
 		// Add the container's resource requirements to its pod's total resource requirements.
-		fgPod.taskCPU += *cntr.definition.Cpu
-		fgPod.taskMemory += *cntr.definition.Memory
+		fgPod.taskCPU += int64(cntr.definition.Cpu)
+		fgPod.taskMemory += int64(aws.ToInt32(cntr.definition.Memory))
 
 		// Insert the container to its pod.
 		fgPod.containers[containerSpec.Name] = cntr
 
 		// Insert container definition to the task definition.
-		taskDef.ContainerDefinitions = append(taskDef.ContainerDefinitions, &cntr.definition)
+		taskDef.ContainerDefinitions = append(taskDef.ContainerDefinitions, cntr.definition)
 	}
 
 	// Set task resource limits.
@@ -126,7 +126,7 @@ func NewPod(cluster *Cluster, pod *corev1.Pod) (*Pod, error) {
 
 	// Register the task definition with Fargate.
 	log.Printf("RegisterTaskDefinition input:%+v", taskDef)
-	output, err := api.RegisterTaskDefinition(taskDef)
+	output, err := client.api.RegisterTaskDefinition(ctx, taskDef)
 	if err != nil {
 		err = fmt.Errorf("failed to register task definition: %v", err)
 		return nil, err
@@ -135,7 +135,7 @@ func NewPod(cluster *Cluster, pod *corev1.Pod) (*Pod, error) {
 	log.Printf("RegisterTaskDefinition output:%+v", output)
 
 	// Save the registered task definition ARN.
-	fgPod.taskDefArn = *output.TaskDefinition.TaskDefinitionArn
+	fgPod.taskDefArn = aws.ToString(output.TaskDefinition.TaskDefinitionArn)
 
 	if cluster != nil {
 		cluster.InsertPod(fgPod, tag)
@@ -165,26 +165,24 @@ func NewPodFromTag(cluster *Cluster, tag string) (*Pod, error) {
 }
 
 // Start deploys and runs a Kubernetes pod on Fargate.
-func (pod *Pod) Start() error {
-	api := client.api
-
+func (pod *Pod) Start(ctx context.Context) error {
 	// Pods always get an ENI with a private IPv4 address in customer subnet.
 	// Assign a public IPv4 address to the ENI only if requested.
-	assignPublicIPAddress := ecs.AssignPublicIpDisabled
+	assignPublicIPAddress := types.AssignPublicIpDisabled
 	if pod.cluster.assignPublicIPv4Address {
-		assignPublicIPAddress = ecs.AssignPublicIpEnabled
+		assignPublicIPAddress = types.AssignPublicIpEnabled
 	}
 
 	// Start the task.
 	runTaskInput := &ecs.RunTaskInput{
 		Cluster:    aws.String(pod.cluster.name),
-		Count:      aws.Int64(1),
-		LaunchType: aws.String(ecs.LaunchTypeFargate),
-		NetworkConfiguration: &ecs.NetworkConfiguration{
-			AwsvpcConfiguration: &ecs.AwsVpcConfiguration{
-				AssignPublicIp: aws.String(assignPublicIPAddress),
-				SecurityGroups: aws.StringSlice(pod.cluster.securityGroups),
-				Subnets:        aws.StringSlice(pod.cluster.subnets),
+		Count:      aws.Int32(1),
+		LaunchType: types.LaunchTypeFargate,
+		NetworkConfiguration: &types.NetworkConfiguration{
+			AwsvpcConfiguration: &types.AwsVpcConfiguration{
+				AssignPublicIp: assignPublicIPAddress,
+				SecurityGroups: pod.cluster.securityGroups,
+				Subnets:        pod.cluster.subnets,
 			},
 		},
 		PlatformVersion: aws.String(pod.cluster.platformVersion),
@@ -193,26 +191,27 @@ func (pod *Pod) Start() error {
 	}
 
 	log.Printf("RunTask input:%+v", runTaskInput)
-	runTaskOutput, err := api.RunTask(runTaskInput)
-	if err != nil || len(runTaskOutput.Tasks) == 0 {
+	runTaskOutput, err := client.api.RunTask(ctx, runTaskInput)
+	if err == nil && len(runTaskOutput.Tasks) == 0 {
+		err = fmt.Errorf("no task in the answer")
 		if len(runTaskOutput.Failures) != 0 {
-			err = fmt.Errorf("reason: %s", *runTaskOutput.Failures[0].Reason)
+			err = fmt.Errorf("reason: %s", aws.ToString(runTaskOutput.Failures[0].Reason))
 		}
+	}
+	if err != nil {
 		err = fmt.Errorf("failed to run task: %v", err)
 		return err
 	}
 
 	log.Printf("RunTask output:%+v", runTaskOutput)
 	// Save the task ARN.
-	pod.taskArn = *runTaskOutput.Tasks[0].TaskArn
+	pod.taskArn = aws.ToString(runTaskOutput.Tasks[0].TaskArn)
 
 	return nil
 }
 
 // Stop stops a running Kubernetes pod on Fargate.
-func (pod *Pod) Stop() error {
-	api := client.api
-
+func (pod *Pod) Stop(ctx context.Context) error {
 	// Stop the task.
 	stopTaskInput := &ecs.StopTaskInput{
 		Cluster: aws.String(pod.cluster.name),
@@ -221,7 +220,7 @@ func (pod *Pod) Stop() error {
 	}
 
 	log.Printf("StopTask input:%+v", stopTaskInput)
-	stopTaskOutput, err := api.StopTask(stopTaskInput)
+	stopTaskOutput, err := client.api.StopTask(ctx, stopTaskInput)
 	log.Printf("StopTask err:%+v output:%+v", err, stopTaskOutput)
 	if err != nil {
 		err = fmt.Errorf("failed to stop task: %v", err)
@@ -229,7 +228,7 @@ func (pod *Pod) Stop() error {
 	}
 
 	// Deregister the task definition.
-	_, err = api.DeregisterTaskDefinition(&ecs.DeregisterTaskDefinitionInput{
+	_, err = client.api.DeregisterTaskDefinition(ctx, &ecs.DeregisterTaskDefinitionInput{
 		TaskDefinition: aws.String(pod.taskDefArn),
 	})
 	if err != nil {
@@ -245,8 +244,8 @@ func (pod *Pod) Stop() error {
 }
 
 // GetSpec returns the specification of a Kubernetes pod on Fargate.
-func (pod *Pod) GetSpec() (*corev1.Pod, error) {
-	task, err := pod.describe()
+func (pod *Pod) GetSpec(ctx context.Context) (*corev1.Pod, error) {
+	task, err := pod.describe(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -255,8 +254,8 @@ func (pod *Pod) GetSpec() (*corev1.Pod, error) {
 }
 
 // GetStatus returns the status of a Kubernetes pod on Fargate.
-func (pod *Pod) GetStatus() corev1.PodStatus {
-	task, err := pod.describe()
+func (pod *Pod) GetStatus(ctx context.Context) corev1.PodStatus {
+	task, err := pod.describe(ctx)
 	if err != nil {
 		return corev1.PodStatus{Phase: corev1.PodUnknown}
 	}
@@ -326,52 +325,53 @@ func (pod *Pod) mapTaskSize() error {
 }
 
 // Describe retrieves the status of a Kubernetes pod from Fargate.
-func (pod *Pod) describe() (*ecs.Task, error) {
-	api := client.api
-
+func (pod *Pod) describe(ctx context.Context) (*types.Task, error) {
 	// Describe the task.
 	describeTasksInput := &ecs.DescribeTasksInput{
 		Cluster: aws.String(pod.cluster.name),
-		Tasks:   []*string{aws.String(pod.taskArn)},
+		Tasks:   []string{pod.taskArn},
 	}
 
-	describeTasksOutput, err := api.DescribeTasks(describeTasksInput)
-	if err != nil || len(describeTasksOutput.Tasks) == 0 {
+	describeTasksOutput, err := client.api.DescribeTasks(ctx, describeTasksInput)
+	if err == nil && len(describeTasksOutput.Tasks) == 0 {
+		err = fmt.Errorf("no task in the answer")
 		if len(describeTasksOutput.Failures) != 0 {
-			err = fmt.Errorf("reason: %s", *describeTasksOutput.Failures[0].Reason)
+			err = fmt.Errorf("reason: %s", aws.ToString(describeTasksOutput.Failures[0].Reason))
 		}
+	}
+	if err != nil {
 		err = fmt.Errorf("failed to describe task: %v", err)
 		return nil, err
 	}
 
 	task := describeTasksOutput.Tasks[0]
 
-	pod.taskStatus = *task.LastStatus
+	pod.taskStatus = aws.ToString(task.LastStatus)
 	pod.taskRefreshTime = time.Now()
 
-	return task, nil
+	return &task, nil
 }
 
 // GetSpec returns the specification of a Kubernetes pod on Fargate.
-func (pod *Pod) getSpec(task *ecs.Task) (*corev1.Pod, error) {
+func (pod *Pod) getSpec(task *types.Task) (*corev1.Pod, error) {
 	containers := make([]corev1.Container, 0, len(task.Containers))
 
 	for _, c := range task.Containers {
-		cntrDef := pod.containers[*c.Name].definition
+		cntrDef := pod.containers[aws.ToString(c.Name)].definition
 
 		cntr := corev1.Container{
-			Name:    *c.Name,
-			Image:   *cntrDef.Image,
-			Command: aws.StringValueSlice(cntrDef.EntryPoint),
-			Args:    aws.StringValueSlice(cntrDef.Command),
+			Name:    aws.ToString(c.Name),
+			Image:   aws.ToString(cntrDef.Image),
+			Command: cntrDef.EntryPoint,
+			Args:    cntrDef.Command,
 			Resources: corev1.ResourceRequirements{
 				Limits: corev1.ResourceList{
-					corev1.ResourceCPU:    resource.MustParse(fmt.Sprintf("%d", *cntrDef.Cpu)),
-					corev1.ResourceMemory: resource.MustParse(fmt.Sprintf("%dMi", *cntrDef.Memory)),
+					corev1.ResourceCPU:    resource.MustParse(fmt.Sprintf("%d", cntrDef.Cpu)),
+					corev1.ResourceMemory: resource.MustParse(fmt.Sprintf("%dMi", aws.ToInt32(cntrDef.Memory))),
 				},
 				Requests: corev1.ResourceList{
-					corev1.ResourceCPU:    resource.MustParse(fmt.Sprintf("%d", *cntrDef.Cpu)),
-					corev1.ResourceMemory: resource.MustParse(fmt.Sprintf("%dMi", *cntrDef.MemoryReservation)),
+					corev1.ResourceCPU:    resource.MustParse(fmt.Sprintf("%d", cntrDef.Cpu)),
+					corev1.ResourceMemory: resource.MustParse(fmt.Sprintf("%dMi", aws.ToInt32(cntrDef.MemoryReservation))),
 				},
 			},
 			Ports: make([]corev1.ContainerPort, 0, len(cntrDef.PortMappings)),
@@ -379,21 +379,21 @@ func (pod *Pod) getSpec(task *ecs.Task) (*corev1.Pod, error) {
 		}
 
 		if cntrDef.WorkingDirectory != nil {
-			cntr.WorkingDir = *cntrDef.WorkingDirectory
+			cntr.WorkingDir = aws.ToString(cntrDef.WorkingDirectory)
 		}
 
 		for _, mapping := range cntrDef.PortMappings {
 			cntr.Ports = append(cntr.Ports, corev1.ContainerPort{
-				ContainerPort: int32(*mapping.ContainerPort),
-				HostPort:      int32(*mapping.HostPort),
+				ContainerPort: aws.ToInt32(mapping.ContainerPort),
+				HostPort:      aws.ToInt32(mapping.HostPort),
 				Protocol:      corev1.ProtocolTCP,
 			})
 		}
 
 		for _, env := range cntrDef.Environment {
 			cntr.Env = append(cntr.Env, corev1.EnvVar{
-				Name:  *env.Name,
-				Value: *env.Value,
+				Name:  aws.ToString(env.Name),
+				Value: aws.ToString(env.Value),
 			})
 		}
 
@@ -429,7 +429,7 @@ func (pod *Pod) getSpec(task *ecs.Task) (*corev1.Pod, error) {
 }
 
 // GetStatus returns the status of a Kubernetes pod on Fargate.
-func (pod *Pod) getStatus(task *ecs.Task) corev1.PodStatus {
+func (pod *Pod) getStatus(task *types.Task) corev1.PodStatus {
 	// Translate task status to pod phase.
 	phase := corev1.PodUnknown
 
@@ -488,10 +488,10 @@ func (pod *Pod) getStatus(task *ecs.Task) corev1.PodStatus {
 	// Set the pod IP address from the task ENI information.
 	privateIPv4Address := ""
 	for _, attachment := range task.Attachments {
-		if *attachment.Type == taskAttachmentENI {
+		if aws.ToString(attachment.Type) == taskAttachmentENI {
 			for _, detail := range attachment.Details {
-				if *detail.Name == taskAttachmentENIPrivateIPv4Address {
-					privateIPv4Address = *detail.Value
+				if aws.ToString(detail.Name) == taskAttachmentENIPrivateIPv4Address {
+					privateIPv4Address = aws.ToString(detail.Value)
 				}
 			}
 		}
@@ -500,7 +500,7 @@ func (pod *Pod) getStatus(task *ecs.Task) corev1.PodStatus {
 	// Get statuses from all containers in this pod.
 	containerStatuses := make([]corev1.ContainerStatus, 0, len(task.Containers))
 	for _, cntr := range task.Containers {
-		containerStatuses = append(containerStatuses, pod.containers[*cntr.Name].getStatus(cntr))
+		containerStatuses = append(containerStatuses, pod.containers[aws.ToString(cntr.Name)].getStatus(cntr))
 	}
 
 	// Build the pod status structure to be reported.

@@ -14,12 +14,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/aws/session"
-	"github.com/aws/aws-sdk-go/service/cloudwatchlogs"
-	"github.com/aws/aws-sdk-go/service/ec2"
-	"github.com/aws/aws-sdk-go/service/ecs"
-	"github.com/aws/aws-sdk-go/service/iam"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	awsconfig "github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/service/cloudwatchlogs"
+	"github.com/aws/aws-sdk-go-v2/service/ec2"
+	"github.com/aws/aws-sdk-go-v2/service/ecs"
+	"github.com/aws/aws-sdk-go-v2/service/iam"
 	vkAWS "github.com/virtual-kubelet/aws-fargate"
 	"github.com/virtual-kubelet/virtual-kubelet/node/api"
 	v1 "k8s.io/api/core/v1"
@@ -65,7 +65,7 @@ CloudWatchLogGroupName = "%s"
 `
 
 var (
-	ecsClient        *ecs.ECS
+	ecsClient        *ecs.Client
 	testRegion       string
 	subnetID         *string
 	executorRoleName *string
@@ -91,19 +91,22 @@ func TestMain(m *testing.M) {
 	}
 	fmt.Printf("Starting provider tests in region %s\n", testRegion)
 
-	// Create the session and clients.
-	session := session.New(&aws.Config{
-		Region: aws.String(testRegion),
-	})
+	// Create the clients.
+	ctx := context.Background()
+	cfg, err := awsconfig.LoadDefaultConfig(ctx, awsconfig.WithRegion(testRegion))
+	if err != nil {
+		fmt.Printf("Failed to load the AWS configuration: %+v\n", err)
+		os.Exit(-1)
+	}
 
-	ecsClient = ecs.New(session)
-	ec2Client := ec2.New(session)
-	cloudwatchClient := cloudwatchlogs.New(session)
-	iamClient := iam.New(session)
+	ecsClient = ecs.NewFromConfig(cfg)
+	ec2Client := ec2.NewFromConfig(cfg)
+	cloudwatchClient := cloudwatchlogs.NewFromConfig(cfg)
+	iamClient := iam.NewFromConfig(cfg)
 
 	// Create a test VPC with one subnet and internet access.
 	// Internet access is required to pull public images from the docker registry.
-	subnetID, err = createVpcWithInternetAccess(ec2Client)
+	subnetID, err = createVpcWithInternetAccess(ctx, ec2Client)
 	if err != nil {
 		fmt.Printf("Failed to create VPC: %+v\n", err)
 		os.Exit(-1)
@@ -111,7 +114,7 @@ func TestMain(m *testing.M) {
 
 	// Create the AWS CloudWatch Logs log group used by containers.
 	logGroupName = aws.String("/ecs/" + testName)
-	_, err = cloudwatchClient.CreateLogGroup(&cloudwatchlogs.CreateLogGroupInput{
+	_, err = cloudwatchClient.CreateLogGroup(ctx, &cloudwatchlogs.CreateLogGroupInput{
 		LogGroupName: logGroupName,
 	})
 	if err != nil {
@@ -121,7 +124,7 @@ func TestMain(m *testing.M) {
 
 	// Create the role used by Fargate to write logs and pull ECR images.
 	executorRoleName = aws.String(testName)
-	_, err = iamClient.CreateRole(&iam.CreateRoleInput{
+	_, err = iamClient.CreateRole(ctx, &iam.CreateRoleInput{
 		RoleName:                 executorRoleName,
 		AssumeRolePolicyDocument: aws.String(executorRoleAssumePolicy),
 	})
@@ -131,7 +134,7 @@ func TestMain(m *testing.M) {
 	}
 
 	// Attach the default policy allowing log writes and ECR pulls.
-	_, err = iamClient.AttachRolePolicy(&iam.AttachRolePolicyInput{
+	_, err = iamClient.AttachRolePolicy(ctx, &iam.AttachRolePolicyInput{
 		PolicyArn: aws.String("arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"),
 		RoleName:  executorRoleName,
 	})
@@ -144,7 +147,7 @@ func TestMain(m *testing.M) {
 	exitCode := m.Run()
 
 	// Delete the task execution role.
-	_, err = iamClient.DetachRolePolicy(&iam.DetachRolePolicyInput{
+	_, err = iamClient.DetachRolePolicy(ctx, &iam.DetachRolePolicyInput{
 		PolicyArn: aws.String("arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"),
 		RoleName:  executorRoleName,
 	})
@@ -153,7 +156,7 @@ func TestMain(m *testing.M) {
 	}
 
 	// Delete the role.
-	_, err = iamClient.DeleteRole(&iam.DeleteRoleInput{
+	_, err = iamClient.DeleteRole(ctx, &iam.DeleteRoleInput{
 		RoleName: executorRoleName,
 	})
 	if err != nil {
@@ -161,7 +164,7 @@ func TestMain(m *testing.M) {
 	}
 
 	// Delete the log group.
-	_, err = cloudwatchClient.DeleteLogGroup(&cloudwatchlogs.DeleteLogGroupInput{
+	_, err = cloudwatchClient.DeleteLogGroup(ctx, &cloudwatchlogs.DeleteLogGroupInput{
 		LogGroupName: logGroupName,
 	})
 	if err != nil {
@@ -169,7 +172,7 @@ func TestMain(m *testing.M) {
 	}
 
 	// Delete the test VPC.
-	err = deleteVpc(ec2Client)
+	err = deleteVpc(ctx, ec2Client)
 	if err != nil {
 		fmt.Printf("Failed to delete VPC: %+v\n", err)
 	}
@@ -180,7 +183,7 @@ func TestMain(m *testing.M) {
 // TestAWSFargateProviderPodLifecycle validates basic pod lifecycle by starting and stopping a pod.
 func TestAWSFargateProviderPodLifecycle(t *testing.T) {
 	// Create a cluster for the E2E test.
-	createResponse, err := ecsClient.CreateCluster(&ecs.CreateClusterInput{
+	createResponse, err := ecsClient.CreateCluster(context.Background(), &ecs.CreateClusterInput{
 		ClusterName: aws.String(testName),
 	})
 	if err != nil {
@@ -335,7 +338,7 @@ func TestAWSFargateProviderPodLifecycle(t *testing.T) {
 	})
 
 	// Delete the test cluster.
-	_, err = ecsClient.DeleteCluster(&ecs.DeleteClusterInput{
+	_, err = ecsClient.DeleteCluster(context.Background(), &ecs.DeleteClusterInput{
 		Cluster: clusterID,
 	})
 	if err != nil {

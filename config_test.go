@@ -19,3 +19,13 @@ Subnets = ["subnet-12345678"]
 	assert.NilError(t, err)
 	assert.Check(t, is.Equal(p.region, "example-region-1"))
 }
+
+// TestLoadConfigRegionIsOptional: with no Region in the file, the AWS SDK resolves it later.
+func TestLoadConfigRegionIsOptional(t *testing.T) {
+	var p FargateProvider
+	err := p.loadConfig(strings.NewReader(`
+Subnets = ["subnet-12345678"]
+`))
+	assert.NilError(t, err)
+	assert.Check(t, is.Equal(p.region, ""))
+}
