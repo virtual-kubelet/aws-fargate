@@ -1,3 +1,8 @@
+//go:build e2e
+
+// This end-to-end test creates AWS resources in the account of the credentials it is run with.
+// Run it with: go test -tags e2e .
+
 package aws_test
 
 import (
