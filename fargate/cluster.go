@@ -59,11 +59,6 @@ func NewCluster(config *ClusterConfig) (*Cluster, error) {
 		return nil, fmt.Errorf("cluster name should not contain the '_' character")
 	}
 
-	// Check if Fargate is available in the given region.
-	if !FargateRegions.Include(config.Region) {
-		return nil, fmt.Errorf("Fargate is not available in region %s", config.Region)
-	}
-
 	// Create the client to the regional Fargate service.
 	client, err = newClient(config.Region)
 	if err != nil {
