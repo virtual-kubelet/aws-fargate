@@ -16,6 +16,13 @@ test:
 	@echo running tests
 	@go test -v ./...
 
+# The end-to-end test creates a VPC, an IAM role, a log group and an ECS cluster in the AWS account of the credentials
+# it is run with, and deletes them when it ends. Set VK_TEST_FARGATE_REGION to choose the Region (default us-east-1).
+.PHONY: test-e2e
+test-e2e:
+	@echo running end-to-end tests
+	@go test -v -tags e2e -timeout 30m .
+
 .PHONY: vet
 vet:
 	@go vet ./... #$(packages)

@@ -1,6 +1,7 @@
 package fargate
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -9,9 +10,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/service/cloudwatchlogs"
-	"github.com/aws/aws-sdk-go/service/ecs"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/cloudwatchlogs"
+	"github.com/aws/aws-sdk-go-v2/service/ecs"
+	"github.com/aws/aws-sdk-go-v2/service/ecs/types"
 	"github.com/virtual-kubelet/virtual-kubelet/errdefs"
 	"github.com/virtual-kubelet/virtual-kubelet/node/api"
 	k8sTypes "k8s.io/apimachinery/pkg/types"
@@ -51,7 +53,7 @@ type Cluster struct {
 }
 
 // NewCluster creates a new Cluster object.
-func NewCluster(config *ClusterConfig) (*Cluster, error) {
+func NewCluster(ctx context.Context, config *ClusterConfig) (*Cluster, error) {
 	var err error
 
 	// Cluster name cannot contain '_' as it is used as a separator in task tags.
@@ -59,20 +61,15 @@ func NewCluster(config *ClusterConfig) (*Cluster, error) {
 		return nil, fmt.Errorf("cluster name should not contain the '_' character")
 	}
 
-	// Check if Fargate is available in the given region.
-	if !FargateRegions.Include(config.Region) {
-		return nil, fmt.Errorf("Fargate is not available in region %s", config.Region)
-	}
-
 	// Create the client to the regional Fargate service.
-	client, err = newClient(config.Region)
+	client, err = newClient(ctx, config.Region)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create Fargate client: %v", err)
 	}
 
 	// Initialize the cluster.
 	cluster := &Cluster{
-		region:                  config.Region,
+		region:                  client.region,
 		name:                    config.Name,
 		nodeName:                config.NodeName,
 		subnets:                 config.Subnets,
@@ -90,7 +87,7 @@ func NewCluster(config *ClusterConfig) (*Cluster, error) {
 	}
 
 	// Check if the cluster already exists.
-	err = cluster.describe()
+	err = cluster.describe(ctx)
 	if err != nil && !strings.Contains(err.Error(), clusterFailureReasonMissing) {
 		return nil, err
 	}
@@ -98,14 +95,14 @@ func NewCluster(config *ClusterConfig) (*Cluster, error) {
 	// If not, try to create it.
 	// This might fail if the principal doesn't have the necessary permission.
 	if cluster.arn == "" {
-		err = cluster.create()
+		err = cluster.create(ctx)
 		if err != nil {
 			return nil, err
 		}
 	}
 
 	// Load existing pod state from Fargate to the local cache.
-	err = cluster.loadPodState()
+	err = cluster.loadPodState(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -114,50 +111,49 @@ func NewCluster(config *ClusterConfig) (*Cluster, error) {
 }
 
 // Create creates a new Fargate cluster.
-func (c *Cluster) create() error {
-	api := client.api
-
+func (c *Cluster) create(ctx context.Context) error {
 	input := &ecs.CreateClusterInput{
 		ClusterName: aws.String(c.name),
 	}
 
 	log.Printf("Creating Fargate cluster %s in region %s", c.name, c.region)
 
-	output, err := api.CreateCluster(input)
+	output, err := client.api.CreateCluster(ctx, input)
 	if err != nil {
 		err = fmt.Errorf("failed to create cluster: %v", err)
 		log.Println(err)
 		return err
 	}
 
-	c.arn = aws.StringValue(output.Cluster.ClusterArn)
+	c.arn = aws.ToString(output.Cluster.ClusterArn)
 	log.Printf("Created Fargate cluster %s in region %s", c.name, c.region)
 
 	return nil
 }
 
 // Describe loads information from an existing Fargate cluster.
-func (c *Cluster) describe() error {
-	api := client.api
-
+func (c *Cluster) describe(ctx context.Context) error {
 	input := &ecs.DescribeClustersInput{
-		Clusters: aws.StringSlice([]string{c.name}),
+		Clusters: []string{c.name},
 	}
 
 	log.Printf("Looking for Fargate cluster %s in region %s.", c.name, c.region)
 
-	output, err := api.DescribeClusters(input)
-	if err != nil || len(output.Clusters) == 0 {
+	output, err := client.api.DescribeClusters(ctx, input)
+	if err == nil && len(output.Clusters) == 0 {
+		err = fmt.Errorf("no cluster in the answer")
 		if len(output.Failures) > 0 {
-			err = fmt.Errorf("reason: %s", *output.Failures[0].Reason)
+			err = fmt.Errorf("reason: %s", aws.ToString(output.Failures[0].Reason))
 		}
+	}
+	if err != nil {
 		err = fmt.Errorf("failed to describe cluster: %v", err)
 		log.Println(err)
 		return err
 	}
 
 	log.Printf("Found Fargate cluster %s in region %s.", c.name, c.region)
-	c.arn = aws.StringValue(output.Clusters[0].ClusterArn)
+	c.arn = aws.ToString(output.Clusters[0].ClusterArn)
 
 	return nil
 }
@@ -165,30 +161,25 @@ func (c *Cluster) describe() error {
 // LoadPodState rebuilds pod and container objects in this cluster by loading existing tasks from
 // Fargate. This is done during startup and whenever the local state is suspected to be out of sync
 // with the actual state in Fargate. Caching state locally minimizes the number of service calls.
-func (c *Cluster) loadPodState() error {
-	api := client.api
-
+func (c *Cluster) loadPodState(ctx context.Context) error {
 	log.Printf("Loading pod state from cluster %s.", c.name)
 
-	taskArns := make([]*string, 0)
+	taskArns := make([]string, 0)
 
 	// Get a list of all Fargate tasks running on this cluster.
-	err := api.ListTasksPages(
-		&ecs.ListTasksInput{
-			Cluster:       aws.String(c.name),
-			DesiredStatus: aws.String(ecs.DesiredStatusRunning),
-			LaunchType:    aws.String(ecs.LaunchTypeFargate),
-		},
-		func(page *ecs.ListTasksOutput, lastPage bool) bool {
-			taskArns = append(taskArns, page.TaskArns...)
-			return !lastPage
-		},
-	)
-
-	if err != nil {
-		err := fmt.Errorf("failed to load pod state: %v", err)
-		log.Println(err)
-		return err
+	paginator := ecs.NewListTasksPaginator(client.api, &ecs.ListTasksInput{
+		Cluster:       aws.String(c.name),
+		DesiredStatus: types.DesiredStatusRunning,
+		LaunchType:    types.LaunchTypeFargate,
+	})
+	for paginator.HasMorePages() {
+		page, err := paginator.NextPage(ctx)
+		if err != nil {
+			err := fmt.Errorf("failed to load pod state: %v", err)
+			log.Println(err)
+			return err
+		}
+		taskArns = append(taskArns, page.TaskArns...)
 	}
 
 	log.Printf("Found %d tasks on cluster %s.", len(taskArns), c.name)
@@ -198,61 +189,57 @@ func (c *Cluster) loadPodState() error {
 	// For each task running on this Fargate cluster...
 	for _, taskArn := range taskArns {
 		// Describe the task.
-		describeTasksOutput, err := api.DescribeTasks(
-			&ecs.DescribeTasksInput{
-				Cluster: aws.String(c.name),
-				Tasks:   []*string{taskArn},
-			},
-		)
+		describeTasksOutput, err := client.api.DescribeTasks(ctx, &ecs.DescribeTasksInput{
+			Cluster: aws.String(c.name),
+			Tasks:   []string{taskArn},
+		})
 
 		if err != nil || len(describeTasksOutput.Tasks) != 1 {
-			log.Printf("Failed to describe task %s. Skipping.", *taskArn)
+			log.Printf("Failed to describe task %s. Skipping.", taskArn)
 			continue
 		}
 
 		task := describeTasksOutput.Tasks[0]
 
 		// Describe the task definition.
-		describeTaskDefinitionOutput, err := api.DescribeTaskDefinition(
-			&ecs.DescribeTaskDefinitionInput{
-				TaskDefinition: task.TaskDefinitionArn,
-			},
-		)
+		describeTaskDefinitionOutput, err := client.api.DescribeTaskDefinition(ctx, &ecs.DescribeTaskDefinitionInput{
+			TaskDefinition: task.TaskDefinitionArn,
+		})
 
 		if err != nil {
-			log.Printf("Failed to describe task definition %s. Skipping.", *task.TaskDefinitionArn)
+			log.Printf("Failed to describe task definition %s. Skipping.", aws.ToString(task.TaskDefinitionArn))
 			continue
 		}
 
 		taskDef := describeTaskDefinitionOutput.TaskDefinition
 
 		// A pod's tag is stored in its task definition's Family field.
-		tag := aws.StringValue(taskDef.Family)
+		tag := aws.ToString(taskDef.Family)
 
 		// Rebuild the pod object.
 		// Not all tasks are necessarily pods. Skip tasks that do not have a valid tag.
 		pod, err := NewPodFromTag(c, tag)
 		if err != nil {
-			log.Printf("Skipping unknown task %s: %v", *taskArn, err)
+			log.Printf("Skipping unknown task %s: %v", taskArn, err)
 			continue
 		}
 
-		pod.uid = k8sTypes.UID(aws.StringValue(task.StartedBy))
-		pod.taskDefArn = aws.StringValue(task.TaskDefinitionArn)
-		pod.taskArn = aws.StringValue(task.TaskArn)
+		pod.uid = k8sTypes.UID(aws.ToString(task.StartedBy))
+		pod.taskDefArn = aws.ToString(task.TaskDefinitionArn)
+		pod.taskArn = aws.ToString(task.TaskArn)
 		if taskDef.TaskRoleArn != nil {
-			pod.taskRoleArn = aws.StringValue(taskDef.TaskRoleArn)
+			pod.taskRoleArn = aws.ToString(taskDef.TaskRoleArn)
 		}
-		pod.taskStatus = aws.StringValue(task.LastStatus)
+		pod.taskStatus = aws.ToString(task.LastStatus)
 		pod.taskRefreshTime = time.Now()
 
 		// Rebuild the container objects.
 		for _, cntrDef := range taskDef.ContainerDefinitions {
 			cntr, _ := newContainerFromDefinition(cntrDef, task.CreatedAt)
 
-			pod.taskCPU += aws.Int64Value(cntr.definition.Cpu)
-			pod.taskMemory += aws.Int64Value(cntr.definition.Memory)
-			pod.containers[aws.StringValue(cntrDef.Name)] = cntr
+			pod.taskCPU += int64(cntr.definition.Cpu)
+			pod.taskMemory += int64(aws.ToInt32(cntr.definition.Memory))
+			pod.containers[aws.ToString(cntrDef.Name)] = cntr
 
 			log.Printf("Found pod %s/%s on cluster %s.", pod.namespace, pod.name, c.name)
 		}
@@ -313,13 +300,13 @@ func (c *Cluster) RemovePod(tag string) {
 }
 
 // GetContainerLogs returns the logs of a container from this cluster.
-func (c *Cluster) GetContainerLogs(namespace, podName, containerName string, opts api.ContainerLogOpts) (io.ReadCloser, error) {
+func (c *Cluster) GetContainerLogs(ctx context.Context, namespace, podName, containerName string, opts api.ContainerLogOpts) (io.ReadCloser, error) {
 	if c.cloudWatchLogGroupName == "" {
 		return nil, fmt.Errorf("logs not configured, please specify a \"CloudWatchLogGroupName\"")
 	}
 
 	prefix := fmt.Sprintf("%s_%s", buildTaskDefinitionTag(c.name, namespace, podName), containerName)
-	describeResult, err := client.logsapi.DescribeLogStreams(&cloudwatchlogs.DescribeLogStreamsInput{
+	describeResult, err := client.logsapi.DescribeLogStreams(ctx, &cloudwatchlogs.DescribeLogStreamsInput{
 		LogGroupName:        aws.String(c.cloudWatchLogGroupName),
 		LogStreamNamePrefix: aws.String(prefix),
 	})
@@ -334,24 +321,26 @@ func (c *Cluster) GetContainerLogs(namespace, podName, containerName string, opt
 
 	logs := ""
 
-	err = client.logsapi.GetLogEventsPages(&cloudwatchlogs.GetLogEventsInput{
-		Limit:         aws.Int64(int64(opts.Tail)),
+	input := &cloudwatchlogs.GetLogEventsInput{
+		Limit:         aws.Int32(int32(opts.Tail)),
 		LogGroupName:  aws.String(c.cloudWatchLogGroupName),
 		LogStreamName: describeResult.LogStreams[0].LogStreamName,
-	}, func(page *cloudwatchlogs.GetLogEventsOutput, lastPage bool) bool {
+	}
+	for {
+		page, err := client.logsapi.GetLogEvents(ctx, input)
+		if err != nil {
+			return nil, err
+		}
 		for _, event := range page.Events {
-			logs += *event.Message
+			logs += aws.ToString(event.Message)
 			logs += "\n"
 		}
 
-		// Due to a issue in the aws-sdk last page is never true, but the we can stop
-		// as soon as no further results are returned.
-		// See https://github.com/aws/aws-sdk-ruby/pull/730.
-		return len(page.Events) > 0
-	})
-
-	if err != nil {
-		return nil, err
+		// Stop as soon as a page returns no further events, or the service returns the token it was given.
+		if len(page.Events) == 0 || page.NextForwardToken == nil || aws.ToString(page.NextForwardToken) == aws.ToString(input.NextToken) {
+			break
+		}
+		input.NextToken = page.NextForwardToken
 	}
 
 	return ioutil.NopCloser(strings.NewReader(logs)), nil

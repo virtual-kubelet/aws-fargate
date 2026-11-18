@@ -93,7 +93,7 @@ func NewFargateProvider(
 		PlatformVersion:         p.platformVersion,
 	}
 
-	p.cluster, err = fargate.NewCluster(&clusterConfig)
+	p.cluster, err = fargate.NewCluster(context.Background(), &clusterConfig)
 	if err != nil {
 		err = fmt.Errorf("failed to create Fargate cluster: %v", err)
 		return nil, err
@@ -110,13 +110,13 @@ func NewFargateProvider(
 func (p *FargateProvider) CreatePod(ctx context.Context, pod *corev1.Pod) error {
 	log.Printf("Received CreatePod request for %+v.\n", pod)
 
-	fgPod, err := fargate.NewPod(p.cluster, pod)
+	fgPod, err := fargate.NewPod(ctx, p.cluster, pod)
 	if err != nil {
 		log.Printf("Failed to create pod: %v.\n", err)
 		return err
 	}
 
-	err = fgPod.Start()
+	err = fgPod.Start(ctx)
 	if err != nil {
 		log.Printf("Failed to start pod: %v.\n", err)
 		return err
@@ -141,7 +141,7 @@ func (p *FargateProvider) DeletePod(ctx context.Context, pod *corev1.Pod) error 
 		return err
 	}
 
-	err = fgPod.Stop()
+	err = fgPod.Stop(ctx)
 	if err != nil {
 		log.Printf("Failed to stop pod: %v.\n", err)
 		return err
@@ -160,7 +160,7 @@ func (p *FargateProvider) GetPod(ctx context.Context, namespace, name string) (*
 		return nil, err
 	}
 
-	spec, err := pod.GetSpec()
+	spec, err := pod.GetSpec(ctx)
 	if err != nil {
 		log.Printf("Failed to get pod spec: %v.\n", err)
 		return nil, err
@@ -172,7 +172,7 @@ func (p *FargateProvider) GetPod(ctx context.Context, namespace, name string) (*
 // GetContainerLogs retrieves the logs of a container by name from the provider.
 func (p *FargateProvider) GetContainerLogs(ctx context.Context, namespace, podName, containerName string, opts api.ContainerLogOpts) (io.ReadCloser, error) {
 	log.Printf("Received GetContainerLogs request for %s/%s/%s.\n", namespace, podName, containerName)
-	return p.cluster.GetContainerLogs(namespace, podName, containerName, opts)
+	return p.cluster.GetContainerLogs(ctx, namespace, podName, containerName, opts)
 }
 
 // GetPodFullName retrieves the full pod name as defined in the provider context.
@@ -196,7 +196,7 @@ func (p *FargateProvider) GetPodStatus(ctx context.Context, namespace, name stri
 		return nil, err
 	}
 
-	status := pod.GetStatus()
+	status := pod.GetStatus(ctx)
 
 	log.Printf("Responding to GetPodStatus: %+v.\n", status)
 
@@ -217,7 +217,7 @@ func (p *FargateProvider) GetPods(ctx context.Context) ([]*corev1.Pod, error) {
 	var podNames []string
 
 	for _, pod := range pods {
-		spec, err := pod.GetSpec()
+		spec, err := pod.GetSpec(ctx)
 		if err != nil {
 			log.Printf("Failed to get pod spec: %v.\n", err)
 			continue

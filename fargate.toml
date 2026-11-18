@@ -5,7 +5,8 @@
 # virtual-kubelet --provider aws --provider-config fargate.toml
 #
 
-# AWS region where Fargate resources are provisioned. Mandatory.
+# AWS Region where Fargate resources are provisioned. Optional: if omitted, the AWS SDK resolves it
+# from AWS_REGION or the shared configuration file.
 Region = "us-east-1"
 
 # AWS Fargate cluster name. Optional. Defaults to "default".

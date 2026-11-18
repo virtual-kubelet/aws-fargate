@@ -5,7 +5,6 @@ import (
 	"io"
 	"os"
 
-	"github.com/virtual-kubelet/aws-fargate/fargate"
 	"github.com/virtual-kubelet/virtual-kubelet/providers"
 
 	"github.com/BurntSushi/toml"
@@ -85,14 +84,8 @@ func (p *FargateProvider) loadConfig(r io.Reader) error {
 	}
 
 	// Validate aggregate configuration.
-	if config.Region == "" {
-		return fmt.Errorf("Region is a required field")
-	}
-	if !fargate.FargateRegions.Include(config.Region) {
-		return fmt.Errorf(
-			"Fargate is available only in regions %v and not available in %v",
-			fargate.FargateRegions.Names(), config.Region)
-	}
+	// The Region is not checked against a list: it is the AWS SDK's to resolve, from this file or from AWS_REGION or the
+	// shared configuration when it is empty.
 	if config.Subnets == nil || len(config.Subnets) == 0 {
 		return fmt.Errorf("Subnets is a required field")
 	}

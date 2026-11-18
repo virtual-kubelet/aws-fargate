@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/service/ecs"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/ecs/types"
 	"gotest.tools/assert"
 	is "gotest.tools/assert/cmp"
 
@@ -49,10 +49,10 @@ func TestContainerDefinition(t *testing.T) {
 
 	assert.Check(t, is.Equal(cntrSpec.Name, *cntr.definition.Name), "incorrect name")
 	assert.Check(t, is.Equal(cntrSpec.Image, *cntr.definition.Image), "incorrect image")
-	assert.Check(t, is.Equal(cntrSpec.Command[0], *cntr.definition.EntryPoint[0]), "incorrect command")
+	assert.Check(t, is.Equal(cntrSpec.Command[0], cntr.definition.EntryPoint[0]), "incorrect command")
 
 	for i, env := range cntrSpec.Args {
-		assert.Check(t, is.Equal(env, *cntr.definition.Command[i]), "incorrect args")
+		assert.Check(t, is.Equal(env, cntr.definition.Command[i]), "incorrect args")
 	}
 
 	assert.Check(t, is.Equal(cntrSpec.WorkingDir, *cntr.definition.WorkingDirectory), "incorrect working dir")
@@ -71,8 +71,8 @@ func TestContainerResourceRequirementsDefaults(t *testing.T) {
 	cntr, err := newContainer(&cntrSpec)
 	assert.NilError(t, err, "failed to create container")
 
-	assert.Check(t, is.Equal(containerDefaultCPULimit, *cntr.definition.Cpu), "incorrect CPU limit")
-	assert.Check(t, is.Equal(containerDefaultMemoryLimit, *cntr.definition.Memory), "incorrect memory limit")
+	assert.Check(t, is.Equal(containerDefaultCPULimit, int64(cntr.definition.Cpu)), "incorrect CPU limit")
+	assert.Check(t, is.Equal(containerDefaultMemoryLimit, int64(aws.ToInt32(cntr.definition.Memory))), "incorrect memory limit")
 }
 
 // TestContainerResourceRequirementsWithRequestsNoLimits verifies whether the container gets
@@ -89,8 +89,8 @@ func TestContainerResourceRequirementsWithRequestsNoLimits(t *testing.T) {
 	cntr, err := newContainer(&cntrSpec)
 	assert.NilError(t, err, "failed to create container")
 
-	assert.Check(t, is.Equal(int64(512), *cntr.definition.Cpu), "incorrect CPU limit")
-	assert.Check(t, is.Equal(int64(768), *cntr.definition.Memory), "incorrect memory limit")
+	assert.Check(t, is.Equal(int64(512), int64(cntr.definition.Cpu)), "incorrect CPU limit")
+	assert.Check(t, is.Equal(int64(768), int64(aws.ToInt32(cntr.definition.Memory))), "incorrect memory limit")
 }
 
 // TestContainerResourceRequirementsWithLimitsNoRequests verifies whether the container gets
@@ -107,8 +107,8 @@ func TestContainerResourceRequirementsWithLimitsNoRequests(t *testing.T) {
 	cntr, err := newContainer(&cntrSpec)
 	assert.NilError(t, err, "failed to create container")
 
-	assert.Check(t, is.Equal(int64(2048), *cntr.definition.Cpu), "incorrect CPU limit")
-	assert.Check(t, is.Equal(int64(2048), *cntr.definition.Memory), "incorrect memory limit")
+	assert.Check(t, is.Equal(int64(2048), int64(cntr.definition.Cpu)), "incorrect CPU limit")
+	assert.Check(t, is.Equal(int64(2048), int64(aws.ToInt32(cntr.definition.Memory))), "incorrect memory limit")
 }
 
 // TestContainerResourceRequirementsWithRequestsAndLimits verifies whether the container gets
@@ -129,8 +129,8 @@ func TestContainerResourceRequirementsWithRequestsAndLimits(t *testing.T) {
 	cntr, err := newContainer(&cntrSpec)
 	assert.NilError(t, err, "failed to create container")
 
-	assert.Check(t, is.Equal(int64(2048), *cntr.definition.Cpu), "incorrect CPU limit")
-	assert.Check(t, is.Equal(int64(2048), *cntr.definition.Memory), "incorrect memory limit")
+	assert.Check(t, is.Equal(int64(2048), int64(cntr.definition.Cpu)), "incorrect CPU limit")
+	assert.Check(t, is.Equal(int64(2048), int64(aws.ToInt32(cntr.definition.Memory))), "incorrect memory limit")
 }
 
 // TestContainerResourceRequirements verifies whether Kubernetes container resource requirements
@@ -198,11 +198,11 @@ func TestContainerResourceRequirementsTranslations(t *testing.T) {
 				assert.NilError(t, err, "failed to create container")
 
 				assert.Check(t,
-					*cntr.definition.Cpu == tc.expectedCPU && *cntr.definition.Memory == tc.expectedMemoryInMiBs,
+					int64(cntr.definition.Cpu) == tc.expectedCPU && int64(aws.ToInt32(cntr.definition.Memory)) == tc.expectedMemoryInMiBs,
 					"requested (cpu:%v memory:%v) expected (cpu:%v memory:%v) observed (cpu:%v memory:%v)",
 					tc.requestedCPU, tc.requestedMemory,
 					tc.expectedCPU, tc.expectedMemoryInMiBs,
-					*cntr.definition.Cpu, *cntr.definition.Memory)
+					int64(cntr.definition.Cpu), int64(aws.ToInt32(cntr.definition.Memory)))
 			})
 	}
 }
@@ -216,14 +216,14 @@ func TestContainerStatus(t *testing.T) {
 	assert.NilError(t, err, "failed to create container")
 
 	// Fargate container status provisioning.
-	state := ecs.Container{
+	state := types.Container{
 		Name:       aws.String(anyContainerName),
 		Reason:     aws.String(anyContainerReason),
 		LastStatus: aws.String(containerStatusProvisioning),
-		ExitCode:   aws.Int64(0),
+		ExitCode:   aws.Int32(0),
 	}
 
-	status := cntr.getStatus(&state)
+	status := cntr.getStatus(state)
 
 	assert.Check(t, is.Equal(anyContainerName, status.Name), "incorrect name")
 	assert.Check(t, status.State.Waiting != nil, "incorrect state")
@@ -235,7 +235,7 @@ func TestContainerStatus(t *testing.T) {
 
 	// Fargate container status pending.
 	state.LastStatus = aws.String(containerStatusPending)
-	status = cntr.getStatus(&state)
+	status = cntr.getStatus(state)
 
 	assert.Check(t, is.Equal(anyContainerName, status.Name), "incorrect name")
 	assert.Check(t, status.State.Waiting != nil, "incorrect state")
@@ -247,7 +247,7 @@ func TestContainerStatus(t *testing.T) {
 
 	// Fargate container status running.
 	state.LastStatus = aws.String(containerStatusRunning)
-	status = cntr.getStatus(&state)
+	status = cntr.getStatus(state)
 
 	assert.Check(t, is.Equal(anyContainerName, status.Name), "incorrect name")
 	assert.Check(t, is.Nil(status.State.Waiting), "incorrect state")
@@ -259,8 +259,8 @@ func TestContainerStatus(t *testing.T) {
 
 	// Fargate container status stopped.
 	state.LastStatus = aws.String(containerStatusStopped)
-	state.ExitCode = aws.Int64(anyContainerExitCode)
-	status = cntr.getStatus(&state)
+	state.ExitCode = aws.Int32(anyContainerExitCode)
+	status = cntr.getStatus(state)
 
 	assert.Check(t, is.Equal(anyContainerName, status.Name), "incorrect name")
 	assert.Check(t, is.Nil(status.State.Waiting), "incorrect state")

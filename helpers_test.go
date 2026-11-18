@@ -1,17 +1,24 @@
+//go:build e2e
+
+// This end-to-end test creates AWS resources in the account of the credentials it is run with.
+// Run it with: go test -tags e2e .
+
 package aws_test
 
 import (
+	"context"
 	"fmt"
 	"time"
 
-	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/service/ec2"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/ec2"
+	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 )
 
 // createVpcWithInternetAccess create a VPC with one subnet and internet access
 // and tags all created resources
-func createVpcWithInternetAccess(ec2Client *ec2.EC2) (*string, error) {
-	vpcCreateResponse, err := ec2Client.CreateVpc(&ec2.CreateVpcInput{
+func createVpcWithInternetAccess(ctx context.Context, ec2Client *ec2.Client) (*string, error) {
+	vpcCreateResponse, err := ec2Client.CreateVpc(ctx, &ec2.CreateVpcInput{
 		CidrBlock: aws.String("172.31.0.0/16"),
 	})
 	if err != nil {
@@ -19,12 +26,12 @@ func createVpcWithInternetAccess(ec2Client *ec2.EC2) (*string, error) {
 	}
 	vpcID := vpcCreateResponse.Vpc.VpcId
 
-	err = tagResource(ec2Client, vpcID)
+	err = tagResource(ctx, ec2Client, vpcID)
 	if err != nil {
 		return nil, err
 	}
 
-	subnetResponse, err := ec2Client.CreateSubnet(&ec2.CreateSubnetInput{
+	subnetResponse, err := ec2Client.CreateSubnet(ctx, &ec2.CreateSubnetInput{
 		CidrBlock: aws.String("172.31.0.0/16"),
 		VpcId:     vpcID,
 	})
@@ -33,23 +40,23 @@ func createVpcWithInternetAccess(ec2Client *ec2.EC2) (*string, error) {
 	}
 	subnetID := subnetResponse.Subnet.SubnetId
 
-	err = tagResource(ec2Client, subnetID)
+	err = tagResource(ctx, ec2Client, subnetID)
 	if err != nil {
 		return nil, err
 	}
 
-	igResponse, err := ec2Client.CreateInternetGateway(&ec2.CreateInternetGatewayInput{})
+	igResponse, err := ec2Client.CreateInternetGateway(ctx, &ec2.CreateInternetGatewayInput{})
 	if err != nil {
 		return nil, err
 	}
 	igID := igResponse.InternetGateway.InternetGatewayId
 
-	err = tagResource(ec2Client, igID)
+	err = tagResource(ctx, ec2Client, igID)
 	if err != nil {
 		return nil, err
 	}
 
-	_, err = ec2Client.AttachInternetGateway(&ec2.AttachInternetGatewayInput{
+	_, err = ec2Client.AttachInternetGateway(ctx, &ec2.AttachInternetGatewayInput{
 		InternetGatewayId: igID,
 		VpcId:             vpcID,
 	})
@@ -57,7 +64,7 @@ func createVpcWithInternetAccess(ec2Client *ec2.EC2) (*string, error) {
 		return nil, err
 	}
 
-	routeTableResponse, err := ec2Client.CreateRouteTable(&ec2.CreateRouteTableInput{
+	routeTableResponse, err := ec2Client.CreateRouteTable(ctx, &ec2.CreateRouteTableInput{
 		VpcId: vpcID,
 	})
 	if err != nil {
@@ -66,12 +73,12 @@ func createVpcWithInternetAccess(ec2Client *ec2.EC2) (*string, error) {
 
 	routeTableID := routeTableResponse.RouteTable.RouteTableId
 
-	err = tagResource(ec2Client, routeTableID)
+	err = tagResource(ctx, ec2Client, routeTableID)
 	if err != nil {
 		return nil, err
 	}
 
-	_, err = ec2Client.AssociateRouteTable(&ec2.AssociateRouteTableInput{
+	_, err = ec2Client.AssociateRouteTable(ctx, &ec2.AssociateRouteTableInput{
 		RouteTableId: routeTableID,
 		SubnetId:     subnetID,
 	})
@@ -79,7 +86,7 @@ func createVpcWithInternetAccess(ec2Client *ec2.EC2) (*string, error) {
 		return nil, err
 	}
 
-	_, err = ec2Client.CreateRoute(&ec2.CreateRouteInput{
+	_, err = ec2Client.CreateRoute(ctx, &ec2.CreateRouteInput{
 		DestinationCidrBlock: aws.String("0.0.0.0/0"),
 		GatewayId:            igID,
 		RouteTableId:         routeTableID,
@@ -92,12 +99,12 @@ func createVpcWithInternetAccess(ec2Client *ec2.EC2) (*string, error) {
 }
 
 // tagResource tries to tag an EC2 resource in a loop to workaround EC2 eventual consistency
-func tagResource(ec2Client *ec2.EC2, resourceID *string) error {
-	fmt.Printf("Tagging: %s\n", *resourceID)
+func tagResource(ctx context.Context, ec2Client *ec2.Client, resourceID *string) error {
+	fmt.Printf("Tagging: %s\n", aws.ToString(resourceID))
 	return retry(func() error {
-		_, err := ec2Client.CreateTags(&ec2.CreateTagsInput{
-			Resources: []*string{resourceID},
-			Tags: []*ec2.Tag{&ec2.Tag{
+		_, err := ec2Client.CreateTags(ctx, &ec2.CreateTagsInput{
+			Resources: []string{aws.ToString(resourceID)},
+			Tags: []ec2types.Tag{{
 				Key:   aws.String("Name"),
 				Value: aws.String("vk-aws-e2e-test"),
 			}},
@@ -110,15 +117,15 @@ func tagResource(ec2Client *ec2.EC2, resourceID *string) error {
 // deleteVpc deletes all resources of the created VPC by enumarating all tagged
 // resources and deleting them with multiple retries to cope with EC2 eventual
 // consistency
-func deleteVpc(ec2Client *ec2.EC2) error {
+func deleteVpc(ctx context.Context, ec2Client *ec2.Client) error {
 	// Remove any routing tables
 	retry(func() error {
-		resourceIDs, err := findResourceByTag(ec2Client, "route-table")
+		resourceIDs, err := findResourceByTag(ctx, ec2Client, "route-table")
 		if err != nil {
 			return err
 		}
 
-		describeResponse, err := ec2Client.DescribeRouteTables(&ec2.DescribeRouteTablesInput{
+		describeResponse, err := ec2Client.DescribeRouteTables(ctx, &ec2.DescribeRouteTablesInput{
 			RouteTableIds: resourceIDs,
 		})
 		if err != nil {
@@ -127,7 +134,7 @@ func deleteVpc(ec2Client *ec2.EC2) error {
 
 		for _, routeTable := range describeResponse.RouteTables {
 			for _, association := range routeTable.Associations {
-				_, err = ec2Client.DisassociateRouteTable(&ec2.DisassociateRouteTableInput{
+				_, err = ec2Client.DisassociateRouteTable(ctx, &ec2.DisassociateRouteTableInput{
 					AssociationId: association.RouteTableAssociationId,
 				})
 
@@ -136,7 +143,7 @@ func deleteVpc(ec2Client *ec2.EC2) error {
 				}
 			}
 
-			_, err = ec2Client.DeleteRouteTable(&ec2.DeleteRouteTableInput{
+			_, err = ec2Client.DeleteRouteTable(ctx, &ec2.DeleteRouteTableInput{
 				RouteTableId: routeTable.RouteTableId,
 			})
 
@@ -150,12 +157,12 @@ func deleteVpc(ec2Client *ec2.EC2) error {
 
 	// Remove associatated internet gateways
 	retry(func() error {
-		resourceIDs, err := findResourceByTag(ec2Client, "internet-gateway")
+		resourceIDs, err := findResourceByTag(ctx, ec2Client, "internet-gateway")
 		if err != nil {
 			return err
 		}
 
-		describeResponse, err := ec2Client.DescribeInternetGateways(&ec2.DescribeInternetGatewaysInput{
+		describeResponse, err := ec2Client.DescribeInternetGateways(ctx, &ec2.DescribeInternetGatewaysInput{
 			InternetGatewayIds: resourceIDs,
 		})
 		if err != nil {
@@ -164,7 +171,7 @@ func deleteVpc(ec2Client *ec2.EC2) error {
 
 		for _, internetGateway := range describeResponse.InternetGateways {
 			for _, attachment := range internetGateway.Attachments {
-				_, err = ec2Client.DetachInternetGateway(&ec2.DetachInternetGatewayInput{
+				_, err = ec2Client.DetachInternetGateway(ctx, &ec2.DetachInternetGatewayInput{
 					InternetGatewayId: internetGateway.InternetGatewayId,
 					VpcId:             attachment.VpcId,
 				})
@@ -174,7 +181,7 @@ func deleteVpc(ec2Client *ec2.EC2) error {
 				}
 			}
 
-			_, err = ec2Client.DeleteInternetGateway(&ec2.DeleteInternetGatewayInput{
+			_, err = ec2Client.DeleteInternetGateway(ctx, &ec2.DeleteInternetGatewayInput{
 				InternetGatewayId: internetGateway.InternetGatewayId,
 			})
 
@@ -188,14 +195,14 @@ func deleteVpc(ec2Client *ec2.EC2) error {
 
 	// Remove subnets
 	retry(func() error {
-		resourceIDs, err := findResourceByTag(ec2Client, "subnet")
+		resourceIDs, err := findResourceByTag(ctx, ec2Client, "subnet")
 		if err != nil {
 			return err
 		}
 
 		for _, resourceID := range resourceIDs {
-			_, err = ec2Client.DeleteSubnet(&ec2.DeleteSubnetInput{
-				SubnetId: resourceID,
+			_, err = ec2Client.DeleteSubnet(ctx, &ec2.DeleteSubnetInput{
+				SubnetId: aws.String(resourceID),
 			})
 
 			if err != nil {
@@ -208,14 +215,14 @@ func deleteVpc(ec2Client *ec2.EC2) error {
 
 	// Remove the VPC itself
 	retry(func() error {
-		resourceIDs, err := findResourceByTag(ec2Client, "vpc")
+		resourceIDs, err := findResourceByTag(ctx, ec2Client, "vpc")
 		if err != nil {
 			return err
 		}
 
 		for _, resourceID := range resourceIDs {
-			_, err = ec2Client.DeleteVpc(&ec2.DeleteVpcInput{
-				VpcId: resourceID,
+			_, err = ec2Client.DeleteVpc(ctx, &ec2.DeleteVpcInput{
+				VpcId: aws.String(resourceID),
 			})
 
 			if err != nil {
@@ -230,20 +237,20 @@ func deleteVpc(ec2Client *ec2.EC2) error {
 }
 
 // findResourceByTag finds EC2 resources by a tag
-func findResourceByTag(ec2Client *ec2.EC2, resourceType string) ([]*string, error) {
-	describeResponse, err := ec2Client.DescribeTags(&ec2.DescribeTagsInput{
-		Filters: []*ec2.Filter{
-			&ec2.Filter{
+func findResourceByTag(ctx context.Context, ec2Client *ec2.Client, resourceType string) ([]string, error) {
+	describeResponse, err := ec2Client.DescribeTags(ctx, &ec2.DescribeTagsInput{
+		Filters: []ec2types.Filter{
+			{
 				Name:   aws.String("key"),
-				Values: []*string{aws.String("Name")},
+				Values: []string{"Name"},
 			},
-			&ec2.Filter{
+			{
 				Name:   aws.String("value"),
-				Values: []*string{aws.String("vk-aws-e2e-test")},
+				Values: []string{"vk-aws-e2e-test"},
 			},
-			&ec2.Filter{
+			{
 				Name:   aws.String("resource-type"),
-				Values: []*string{aws.String(resourceType)},
+				Values: []string{resourceType},
 			},
 		},
 	})
@@ -252,9 +259,9 @@ func findResourceByTag(ec2Client *ec2.EC2, resourceType string) ([]*string, erro
 		return nil, err
 	}
 
-	resourceIDs := make([]*string, len(describeResponse.Tags))
+	resourceIDs := make([]string, len(describeResponse.Tags))
 	for i, tag := range describeResponse.Tags {
-		resourceIDs[i] = tag.ResourceId
+		resourceIDs[i] = aws.ToString(tag.ResourceId)
 	}
 
 	return resourceIDs, nil
@@ -271,6 +278,7 @@ func retry(action fn) error {
 		if attempts == 0 {
 			return fmt.Errorf("action failed, maximum attempts reached")
 		}
+		attempts--
 
 		err := action()
 		if err == nil {
